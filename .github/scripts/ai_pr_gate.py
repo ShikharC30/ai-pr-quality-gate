@@ -22,12 +22,10 @@ def main():
             f.write("✅ **No code changes detected to review.**")
         return
 
-    # Keep diff within safe token boundaries
-    diff_sample = diff_text[:12000]
+    diff_sample = diff_text[:8000]
 
     system_instruction = (
         "You are an Automated Principal Software Engineer and QA Lead reviewing a Pull Request.\n"
-        "Follow industry code review best practices (like Cloudflare and Meta).\n\n"
         "Analyze this git diff carefully:\n\n"
         + diff_sample + "\n\n"
         "Respond strictly in GitHub Markdown using these exact headings:\n"
@@ -43,20 +41,34 @@ def main():
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("GEMINI_API_KEY is missing from environment.")
+        with open("pr_review.md", "w", encoding="utf-8") as f:
+            f.write("⚠️ **Configuration Error:** `GEMINI_API_KEY` secret is not configured in repository settings.")
         return
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + api_key
+    # Use current active models with automatic fallback
+    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"]
     payload = {
         "contents": [{"parts": [{"text": system_instruction}]}]
     }
 
-    try:
-        res = requests.post(url, json=payload, timeout=60)
-        res_data = res.json()
-        review_body = res_data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as err:
-        review_body = "⚠️ **AI Reviewer Error:** Could not parse AI response.\nDetails: `" + str(err) + "`"
+    review_body = None
+    last_err = ""
+
+    for model_name in candidate_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        try:
+            res = requests.post(url, json=payload, timeout=45)
+            res_data = res.json()
+            if "candidates" in res_data and len(res_data["candidates"]) > 0:
+                review_body = res_data["candidates"][0]["content"]["parts"][0]["text"]
+                break
+            elif "error" in res_data:
+                last_err = res_data.get("error", {}).get("message", str(res_data))
+        except Exception as e:
+            last_err = str(e)
+
+    if not review_body:
+        review_body = f"⚠️ **Gemini API Error:** `{last_err}`"
 
     with open("pr_review.md", "w", encoding="utf-8") as f:
         f.write(review_body)
