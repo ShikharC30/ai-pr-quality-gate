@@ -45,8 +45,8 @@ def main():
             f.write("⚠️ **Configuration Error:** `GEMINI_API_KEY` secret is not configured in repository settings.")
         return
 
-    # Using standard v1beta models endpoint with fallback model selection
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    # Try 1.5 flash first as standard fallback
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     payload = {
         "contents": [{"parts": [{"text": system_instruction}]}]
     }
@@ -58,14 +58,8 @@ def main():
         if "candidates" in res_data and len(res_data["candidates"]) > 0:
             review_body = res_data["candidates"][0]["content"]["parts"][0]["text"]
         elif "error" in res_data:
-            # Fallback to gemini-1.5-flash if 2.5 is not enabled on the key
-            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-            fallback_res = requests.post(fallback_url, json=payload, timeout=45).json()
-            if "candidates" in fallback_res:
-                review_body = fallback_res["candidates"][0]["content"]["parts"][0]["text"]
-            else:
-                err_msg = res_data.get("error", {}).get("message", str(res_data))
-                review_body = f"⚠️ **Gemini API Error:** `{err_msg}`"
+            err_msg = res_data.get("error", {}).get("message", str(res_data))
+            review_body = f"⚠️ **Gemini API Error:** `{err_msg}`"
         else:
             review_body = f"⚠️ **Unexpected Response:** `{str(res_data)}`"
 
