@@ -45,26 +45,30 @@ def main():
             f.write("⚠️ **Configuration Error:** `GEMINI_API_KEY` secret is not configured in repository settings.")
         return
 
-    # Try 1.5 flash first as standard fallback
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # Use current active models with automatic fallback
+    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"]
     payload = {
         "contents": [{"parts": [{"text": system_instruction}]}]
     }
 
-    try:
-        res = requests.post(url, json=payload, timeout=45)
-        res_data = res.json()
+    review_body = None
+    last_err = ""
 
-        if "candidates" in res_data and len(res_data["candidates"]) > 0:
-            review_body = res_data["candidates"][0]["content"]["parts"][0]["text"]
-        elif "error" in res_data:
-            err_msg = res_data.get("error", {}).get("message", str(res_data))
-            review_body = f"⚠️ **Gemini API Error:** `{err_msg}`"
-        else:
-            review_body = f"⚠️ **Unexpected Response:** `{str(res_data)}`"
+    for model_name in candidate_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        try:
+            res = requests.post(url, json=payload, timeout=45)
+            res_data = res.json()
+            if "candidates" in res_data and len(res_data["candidates"]) > 0:
+                review_body = res_data["candidates"][0]["content"]["parts"][0]["text"]
+                break
+            elif "error" in res_data:
+                last_err = res_data.get("error", {}).get("message", str(res_data))
+        except Exception as e:
+            last_err = str(e)
 
-    except Exception as err:
-        review_body = f"⚠️ **Network/Parsing Error:** `{str(err)}`"
+    if not review_body:
+        review_body = f"⚠️ **Gemini API Error:** `{last_err}`"
 
     with open("pr_review.md", "w", encoding="utf-8") as f:
         f.write(review_body)
