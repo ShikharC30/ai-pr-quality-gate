@@ -1,16 +1,23 @@
-def calculate_discount(price, discount_percent):
-    """Calculates discount on an item."""
-    return price - (price * (discount_percent / 100))
+"""
+Payment Processing Service Module.
+"""
 
-def process_user_payment(user_id, amount, db_connection):
+def process_user_payment(user_id: str, amount: float, db_connection):
     """
-    Processes transaction and updates user balance.
-    Has critical security flaw & potential zero division.
+    Executes payment transaction for a customer account.
     """
-    # Flaw 1: SQL Injection vulnerability (unquoted, unsanitized string format)
+    if amount <= 0:
+        raise ValueError("Payment amount must be greater than zero.")
+
+    # Flaw 1: Dynamic string concatenation causing SQL injection vulnerability
     query = f"UPDATE accounts SET balance = balance - {amount} WHERE user_id = '{user_id}'"
     db_connection.execute(query)
-    
-    # Flaw 2: Zero division crash if amount is 0
-    fee_rate = 100 / amount 
-    return {"status": "success", "fee": fee_rate}
+
+    # Flaw 2: Missing idempotency key check (Violates event-flow.md Rule #1)
+    # Flaw 3: Missing PAYMENT_COMPLETED event emission (Violates event-flow.md Rule #2)
+
+    return {
+        "status": "COMPLETED",
+        "user_id": user_id,
+        "amount": amount
+    }
