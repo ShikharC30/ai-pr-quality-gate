@@ -2,10 +2,14 @@ name: "AI SDLC Quality Gate"
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
 
 jobs:
   ai-code-review:
+    # Trigger on PR events OR when an override command is commented
+    if: github.event_name == 'pull_request' || (github.event.issue.pull_request && contains(github.event.comment.body, 'bot ignore-and-pass'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -13,10 +17,28 @@ jobs:
       issues: write
 
     steps:
+      - name: Resolve Branch Name
+        id: branch_info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (context.eventName === 'pull_request') {
+              core.setOutput('ref', context.payload.pull_request.head.ref);
+              core.setOutput('pr_number', context.payload.pull_request.number);
+            } else {
+              const pr = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number
+              });
+              core.setOutput('ref', pr.data.head.ref);
+              core.setOutput('pr_number', context.issue.number);
+            }
+
       - name: Checkout PR Branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          ref: ${{ steps.branch_info.outputs.ref }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -27,7 +49,22 @@ jobs:
       - name: Install Dependencies
         run: pip install requests
 
+      - name: Check for User Override Command
+        id: override_check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = parseInt('${{ steps.branch_info.outputs.pr_number }}');
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+            const hasOverride = comments.data.some(c => c.body.includes('bot ignore-and-pass'));
+            core.setOutput('is_overridden', hasOverride ? 'true' : 'false');
+
       - name: Run AI Quality Reviewer
+        if: steps.override_check.outputs.is_overridden != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python .github/scripts/ai_pr_gate.py
@@ -37,41 +74,72 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const prNumber = parseInt('${{ steps.branch_info.outputs.pr_number }}');
+            const isOverridden = '${{ steps.override_check.outputs.is_overridden }}' === 'true';
 
-            // 1. Post Review
+            if (isOverridden) {
+              await github.rest.issues.createComment({
+                issue_number: prNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: '⚡ **Quality Gate Overridden:** A reviewer has bypassed review comments with `bot ignore-and-pass`. PR is unlocked.'
+              });
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  name: '🔴 merge-blocked'
+                });
+              } catch(e) {}
+              await github.rest.issues.addLabels({
+                issue_number: prNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['🟢 override-passed']
+              });
+              return;
+            }
+
+            // Post Review Comment
             if (fs.existsSync('pr_review.md')) {
               const body = fs.readFileSync('pr_review.md', 'utf8');
               await github.rest.issues.createComment({
-                issue_number: context.issue.number,
+                issue_number: prNumber,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 body: body
               });
             }
 
-            // 2. Add Label
+            // Add Labels based on block verdict
             if (fs.existsSync('verdict.json')) {
               const verdict = JSON.parse(fs.readFileSync('verdict.json', 'utf8'));
               const label = verdict.block_merge ? '🔴 merge-blocked' : '🟢 gate-passed';
               try {
                 await github.rest.issues.addLabels({
-                  issue_number: context.issue.number,
+                  issue_number: prNumber,
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   labels: [label]
                 });
-              } catch (e) { console.log("Label note:", e.message); }
+              } catch (e) { console.log(e.message); }
             }
 
       - name: Enforce Merge Gate
         run: |
+          if [ "${{ steps.override_check.outputs.is_overridden }}" = "true" ]; then
+            echo "✅ Gate passed via manual reviewer override."
+            exit 0
+          fi
+
           python -c "
           import json, sys
           with open('verdict.json') as f:
               data = json.load(f)
           if data.get('block_merge'):
-              print('🚨 QUALITY GATE FAILED: PR contains critical security risks or event contract violations.')
+              print('🚨 QUALITY GATE BLOCKED: PR review contains issues or contract violations.')
               sys.exit(1)
           else:
-              print('✅ QUALITY GATE PASSED: PR is safe to merge.')
+              print('✅ QUALITY GATE PASSED: Zero critical issues found.')
           "
