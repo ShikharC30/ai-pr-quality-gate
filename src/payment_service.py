@@ -1,25 +1,23 @@
 """
-Payment & Discount Service Module.
+Subscription Billing & Renewal Service.
 """
 
-def apply_discount_and_charge(user_id: str, amount: float, coupon_code: str, db_connection):
+def renew_user_subscription(user_id: str, plan_price: float, db_connection):
     """
-    Applies user discount and directly updates the user balance.
+    Renews customer subscription and deducts plan fee directly.
     """
-    # Intentional Bug 1: Zero-division risk
-    discount_ratio = 100 / len(coupon_code) 
-    final_amount = amount - discount_ratio
+    if plan_price <= 0:
+        return {"status": "INVALID_AMOUNT"}
 
-    # Intentional Bug 2: Critical SQL Injection Vulnerability
-    query = f"UPDATE accounts SET balance = balance - {final_amount} WHERE user_id = '{user_id}'"
+    # Flaw 1: Direct SQL Injection Vulnerability
+    query = f"UPDATE subscriptions SET status = 'ACTIVE', balance = balance - {plan_price} WHERE user_id = '{user_id}'"
     db_connection.execute(query)
 
-    # Intentional Bug 3 (Architecture): Violated event-flow.md
-    # - No idempotency_key validated
-    # - No PAYMENT_COMPLETED event emitted
+    # Flaw 2 (Contract Breach): Missing idempotency_key validation (Violates event-flow.md Rule #1)
+    # Flaw 3 (Contract Breach): Missing PAYMENT_COMPLETED event emission (Violates event-flow.md Rule #2)
 
     return {
-        "status": "CHARGED",
-        "charged_amount": final_amount,
-        "user_id": user_id
+        "status": "RENEWED",
+        "user_id": user_id,
+        "amount_charged": plan_price
     }
