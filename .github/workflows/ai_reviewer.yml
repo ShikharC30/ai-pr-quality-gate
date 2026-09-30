@@ -71,7 +71,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python .github/scripts/ai_pr_gate.py
 
-      - name: Post Review Comment & Apply Labels
+      - name: Sync Quality Gate Status & PR Decorations
         uses: actions/github-script@v7
         with:
           script: |
@@ -80,14 +80,15 @@ jobs:
             const commitSha = '${{ steps.pr_info.outputs.sha }}';
             const isOverridden = '${{ steps.override_check.outputs.is_overridden }}' === 'true';
 
+            // CASE 1: Manual Override
             if (isOverridden) {
               await github.rest.issues.createComment({
                 issue_number: prNumber,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: '⚡ **Quality Gate Overridden:** A reviewer has bypassed review comments with `bot ignore-and-pass`. PR check status updated to Success.'
+                body: '⚡ **Quality Gate Overridden:** Reviewer bypassed checks with `bot ignore-and-pass`. PR is unlocked.'
               });
-              
+
               try {
                 await github.rest.issues.removeLabel({
                   owner: context.repo.owner,
@@ -104,19 +105,18 @@ jobs:
                 labels: ['🟢 override-passed']
               });
 
-              // Explicitly update commit status check to SUCCESS on GitHub
               await github.rest.repos.createCommitStatus({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 sha: commitSha,
                 state: 'success',
-                context: 'AI SDLC Quality Gate / ai-code-review (pull_request)',
-                description: 'Quality Gate manually approved by reviewer'
+                context: 'AI SDLC Quality Gate Enforcement',
+                description: 'Quality Gate manually overridden by reviewer'
               });
               return;
             }
 
-            // Post Review Comment
+            // CASE 2: Normal AI Review Run
             if (fs.existsSync('pr_review.md')) {
               const body = fs.readFileSync('pr_review.md', 'utf8');
               await github.rest.issues.createComment({
@@ -127,34 +127,42 @@ jobs:
               });
             }
 
-            // Add Labels based on block verdict
+            let blockMerge = false;
             if (fs.existsSync('verdict.json')) {
               const verdict = JSON.parse(fs.readFileSync('verdict.json', 'utf8'));
-              const label = verdict.block_merge ? '🔴 merge-blocked' : '🟢 gate-passed';
-              try {
-                await github.rest.issues.addLabels({
-                  issue_number: prNumber,
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  labels: [label]
-                });
-              } catch (e) { console.log(e.message); }
+              blockMerge = verdict.block_merge;
             }
 
-      - name: Enforce Merge Gate
-        run: |
-          if [ "${{ steps.override_check.outputs.is_overridden }}" = "true" ]; then
-            echo "✅ Gate passed via manual reviewer override."
-            exit 0
-          fi
+            if (blockMerge) {
+              await github.rest.issues.addLabels({
+                issue_number: prNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['🔴 merge-blocked']
+              });
 
-          python -c "
-          import json, sys
-          with open('verdict.json') as f:
-              data = json.load(f)
-          if data.get('block_merge'):
-              print('🚨 QUALITY GATE BLOCKED: PR review contains issues or contract violations.')
-              sys.exit(1)
-          else:
-              print('✅ QUALITY GATE PASSED: Zero critical issues found.')
-          "
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha: commitSha,
+                state: 'failure',
+                context: 'AI SDLC Quality Gate Enforcement',
+                description: 'Blocked: Critical flaws or contract violations detected'
+              });
+            } else {
+              await github.rest.issues.addLabels({
+                issue_number: prNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['🟢 gate-passed']
+              });
+
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha: commitSha,
+                state: 'success',
+                context: 'AI SDLC Quality Gate Enforcement',
+                description: 'Approved: Clean code & architectural compliance'
+              });
+            }
