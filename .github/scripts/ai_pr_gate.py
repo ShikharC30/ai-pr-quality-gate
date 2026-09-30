@@ -89,7 +89,13 @@ def main():
     if not review_body:
         review_body = "⚠️ **Error:** Failed to generate review."
 
-    block_merge = "[VERDICT: BLOCKED]" in review_body
+    # Parse verdict STRICTLY from the final verdict section (not inside generated test code)
+    if "FINAL GATE VERDICT" in review_body:
+        final_section = review_body.split("FINAL GATE VERDICT")[-1]
+    else:
+        final_section = review_body
+
+    block_merge = "[VERDICT: BLOCKED]" in final_section
 
     with open("pr_review.md", "w", encoding="utf-8") as f:
         f.write(review_body)
