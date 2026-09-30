@@ -64,26 +64,37 @@ def main():
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         with open("pr_review.md", "w", encoding="utf-8") as f:
-            f.write("⚠️ **Error:** GEMINI_API_KEY missing.")
+            f.write("⚠️ **Error:** GEMINI_API_KEY missing from environment secrets.")
+        with open("verdict.json", "w", encoding="utf-8") as f:
+            json.dump({"block_merge": False}, f)
         return
 
-    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"]
+    # Check against primary stable model names
+    candidate_models = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash-latest"]
     payload = {"contents": [{"parts": [{"text": system_instruction}]}]}
 
     review_body = None
+    debug_errors = []
+
     for model_name in candidate_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         try:
-            res = requests.post(url, json=payload, timeout=50)
+            res = requests.post(url, json=payload, timeout=60)
             res_data = res.json()
             if "candidates" in res_data and len(res_data["candidates"]) > 0:
                 review_body = res_data["candidates"][0]["content"]["parts"][0]["text"]
                 break
-        except Exception:
-            continue
+            elif "error" in res_data:
+                err_msg = res_data["error"].get("message", "Unknown error")
+                debug_errors.append(f"{model_name}: {err_msg}")
+            else:
+                debug_errors.append(f"{model_name}: Unexpected response structure")
+        except Exception as e:
+            debug_errors.append(f"{model_name}: {str(e)}")
 
     if not review_body:
-        review_body = "⚠️ **Error:** Failed to generate review."
+        error_details = " | ".join(debug_errors)
+        review_body = f"⚠️ **Error: Failed to generate review.**\n\n`Debug Info: {error_details}`"
 
     # Parse verdict strictly from the final verdict section
     if "FINAL GATE VERDICT" in review_body:
@@ -93,7 +104,6 @@ def main():
 
     block_merge = "[VERDICT: BLOCKED]" in final_section
 
-    # Guaranteed Action Item Box appended directly
     action_item_box = (
         "\n\n---\n"
         "> 💡 **Action Item for Reviewer:**\n"
