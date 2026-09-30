@@ -8,22 +8,23 @@ on:
 
 jobs:
   ai-code-review:
-    # Trigger on PR events OR when an override command is commented
     if: github.event_name == 'pull_request' || (github.event.issue.pull_request && contains(github.event.comment.body, 'bot ignore-and-pass'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
       issues: write
+      statuses: write
 
     steps:
-      - name: Resolve Branch Name
-        id: branch_info
+      - name: Resolve Branch & Commit SHA
+        id: pr_info
         uses: actions/github-script@v7
         with:
           script: |
             if (context.eventName === 'pull_request') {
               core.setOutput('ref', context.payload.pull_request.head.ref);
+              core.setOutput('sha', context.payload.pull_request.head.sha);
               core.setOutput('pr_number', context.payload.pull_request.number);
             } else {
               const pr = await github.rest.pulls.get({
@@ -32,13 +33,14 @@ jobs:
                 pull_number: context.issue.number
               });
               core.setOutput('ref', pr.data.head.ref);
+              core.setOutput('sha', pr.data.head.sha);
               core.setOutput('pr_number', context.issue.number);
             }
 
       - name: Checkout PR Branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.branch_info.outputs.ref }}
+          ref: ${{ steps.pr_info.outputs.ref }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -54,7 +56,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const prNumber = parseInt('${{ steps.branch_info.outputs.pr_number }}');
+            const prNumber = parseInt('${{ steps.pr_info.outputs.pr_number }}');
             const comments = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -74,7 +76,8 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const prNumber = parseInt('${{ steps.branch_info.outputs.pr_number }}');
+            const prNumber = parseInt('${{ steps.pr_info.outputs.pr_number }}');
+            const commitSha = '${{ steps.pr_info.outputs.sha }}';
             const isOverridden = '${{ steps.override_check.outputs.is_overridden }}' === 'true';
 
             if (isOverridden) {
@@ -82,8 +85,9 @@ jobs:
                 issue_number: prNumber,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: '⚡ **Quality Gate Overridden:** A reviewer has bypassed review comments with `bot ignore-and-pass`. PR is unlocked.'
+                body: '⚡ **Quality Gate Overridden:** A reviewer has bypassed review comments with `bot ignore-and-pass`. PR check status updated to Success.'
               });
+              
               try {
                 await github.rest.issues.removeLabel({
                   owner: context.repo.owner,
@@ -92,11 +96,22 @@ jobs:
                   name: '🔴 merge-blocked'
                 });
               } catch(e) {}
+
               await github.rest.issues.addLabels({
                 issue_number: prNumber,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 labels: ['🟢 override-passed']
+              });
+
+              // Explicitly update commit status check to SUCCESS on GitHub
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha: commitSha,
+                state: 'success',
+                context: 'AI SDLC Quality Gate / ai-code-review (pull_request)',
+                description: 'Quality Gate manually approved by reviewer'
               });
               return;
             }
