@@ -1,0 +1,89 @@
+name: "Apply AI Tests"
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  apply-tests:
+    if: github.event.issue.pull_request && contains(github.event.comment.body, 'bot apply-tests')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Get PR Branch Details
+        id: pr_data
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            core.setOutput('branch', pr.data.head.ref);
+
+      - name: Checkout PR Branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr_data.outputs.branch }}
+
+      - name: Extract Tests from Bot Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            let testCode = '';
+            for (let i = comments.data.length - 1; i >= 0; i--) {
+              const comment = comments.data[i];
+              if (comment.body.includes('STAGE 3: AUTOMATED UNIT TESTS')) {
+                const match = comment.body.match(/```python([\s\S]*?)```/);
+                if (match && match[1]) {
+                  testCode = match[1].trim();
+                  break;
+                }
+              }
+            }
+
+            if (!testCode) {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: '⚠️ **Bot Alert:** Could not find generated test cases to apply.'
+              });
+              process.exit(1);
+            }
+
+            const fs = require('fs');
+            if (!fs.existsSync('tests')) {
+              fs.mkdirSync('tests');
+            }
+            fs.writeFileSync('tests/test_ai_generated.py', '# Auto-committed via developer approval\n\n' + testCode + '\n');
+
+      - name: Commit & Push Tests to Branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add tests/test_ai_generated.py
+          git commit -m "test(ai): apply unit tests via developer approval [skip ci]"
+          git push
+
+      - name: Acknowledge in PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ **Tests Approved & Applied!** Unit tests have been committed to `tests/test_ai_generated.py` on your branch.'
+            });
