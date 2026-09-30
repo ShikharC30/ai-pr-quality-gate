@@ -57,10 +57,6 @@ def main():
         "- State 'None' if compliant, otherwise describe the exact contract violation.\n\n"
         "## 🧪 STAGE 3: AUTOMATED UNIT TESTS (PROPOSED)\n"
         "Write complete, runnable PyTest test code inside a single ```python ... ``` code block.\n\n"
-        "> 💡 **Action Item for Reviewer:**\n"
-        "> If you like these generated tests, reply to this PR with the comment:\n"
-        "> `bot apply-tests`\n"
-        "> This will automatically commit them to this branch. Otherwise, simply ignore to skip.\n\n"
         "## 🚦 FINAL GATE VERDICT\n"
         "Write exactly either '[VERDICT: BLOCKED]' (if SQL injection, critical bug, or event contract violation is present) or '[VERDICT: APPROVED]'."
     )
@@ -89,7 +85,7 @@ def main():
     if not review_body:
         review_body = "⚠️ **Error:** Failed to generate review."
 
-    # Parse verdict STRICTLY from the final verdict section (not inside generated test code)
+    # Parse verdict strictly from the final verdict section
     if "FINAL GATE VERDICT" in review_body:
         final_section = review_body.split("FINAL GATE VERDICT")[-1]
     else:
@@ -97,8 +93,19 @@ def main():
 
     block_merge = "[VERDICT: BLOCKED]" in final_section
 
+    # Guaranteed Action Item Box appended directly
+    action_item_box = (
+        "\n\n---\n"
+        "> 💡 **Action Item for Reviewer:**\n"
+        "> If you like these generated tests, reply to this PR with the comment:\n"
+        "> `bot apply-tests`\n"
+        "> This will automatically commit them to this branch. Otherwise, simply ignore to skip."
+    )
+
+    full_markdown_output = review_body + action_item_box
+
     with open("pr_review.md", "w", encoding="utf-8") as f:
-        f.write(review_body)
+        f.write(full_markdown_output)
 
     with open("verdict.json", "w", encoding="utf-8") as f:
         json.dump({"block_merge": block_merge}, f)
